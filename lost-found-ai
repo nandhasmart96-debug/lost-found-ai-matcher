@@ -1,0 +1,495 @@
+lost-found-ai/
+├── public/
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+├── server.js
+├── package.json
+├── Dockerfile
+├── .gitignore
+└── README.md{
+  "name": "lost-found-ai",
+  "version": "1.0.0",
+  "description": "AI-powered Lost and Found Matcher using Gemini, Firestore and Cloud Run",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
+    "@google/genai": "^1.14.0",
+    "express": "^5.1.0"
+  }
+}const express = require("express");
+const path = require("path");
+const { Firestore } = require("@google-cloud/firestore");
+const { GoogleGenAI } = require("@google/genai");
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+
+const firestore = new Firestore();
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
+
+app.post("/api/match", async (req, res) => {
+  try {
+    const { type, itemName, description, location, date } = req.body;
+
+    if (!type || !itemName || !description) {
+      return res.status(400).json({
+        error: "Please provide item type, name and description."
+      });
+    }
+
+    const prompt = `
+You are an AI Lost and Found matching assistant.
+
+Analyze this ${type} item:
+
+Item name: ${itemName}
+Description: ${description}
+Location: ${location || "Not provided"}
+Date: ${date || "Not provided"}
+
+Return JSON only in this format:
+{
+  "matchScore": number from 0 to 100,
+  "category": "category",
+  "summary": "short explanation",
+  "suggestion": "what the user should do next"
+}
+
+Do not use markdown.
+`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+
+    const text = response.text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    const result = JSON.parse(text);
+
+    const record = {
+      type,
+      itemName,
+      description,
+      location: location || "",
+      date: date || "",
+      result,
+      createdAt: new Date()
+    };
+
+    await firestore.collection("lost_found_items").add(record);
+
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      error: "Something went wrong while analyzing the item."
+    });
+  }
+});
+
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lost & Found AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <main class="container">
+
+    <section class="hero">
+      <div class="badge">✨ AI Powered</div>
+      <h1>Lost & Found<br><span>Matcher</span></h1>
+      <p>Describe your lost or found item and let AI help identify a possible match.</p>
+    </section>
+
+    <section class="card">
+
+      <label>Item Type</label>
+
+      <div class="type-buttons">
+        <button class="type-btn active" data-type="lost">I Lost Something</button>
+        <button class="type-btn" data-type="found">I Found Something</button>
+      </div>
+
+      <form id="matchForm">
+
+        <label for="itemName">Item Name</label>
+        <input
+          id="itemName"
+          type="text"
+          placeholder="Example: Black wallet"
+          required
+        >
+
+        <label for="description">Description</label>
+        <textarea
+          id="description"
+          placeholder="Describe the item, colour, brand, unique marks..."
+          required
+        ></textarea>
+
+        <label for="location">Location</label>
+        <input
+          id="location"
+          type="text"
+          placeholder="Example: Chennai Central"
+        >
+
+        <label for="date">Date</label>
+        <input id="date" type="date">
+
+        <button class="submit-btn" type="submit">
+          🔍 Find Possible Match
+        </button>
+
+      </form>
+
+    </section>
+
+    <section id="loading" class="result card hidden">
+      <div class="loader"></div>
+      <h2>AI is analyzing...</h2>
+      <p>Finding the best possible match.</p>
+    </section>
+
+    <section id="result" class="result card hidden">
+
+      <div class="score">
+        <span id="score">0</span>%
+      </div>
+
+      <h2>Possible Match Analysis</h2>
+
+      <p id="category"></p>
+
+      <div class="result-box">
+        <strong>AI Summary</strong>
+        <p id="summary"></p>
+      </div>
+
+      <div class="result-box">
+        <strong>Next Step</strong>
+        <p id="suggestion"></p>
+      </div>
+
+      <button class="again-btn" onclick="resetForm()">
+        Analyze Another Item
+      </button>
+
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f6f8;
+  color: #18202a;
+}
+
+.container {
+  width: min(700px, 92%);
+  margin: auto;
+  padding: 30px 0 60px;
+}
+
+.hero {
+  text-align: center;
+  padding: 25px 10px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 30px;
+  background: white;
+  font-size: 13px;
+  margin-bottom: 15px;
+}
+
+h1 {
+  font-size: 42px;
+  line-height: 1.05;
+  margin: 5px 0 15px;
+}
+
+h1 span {
+  text-decoration: underline;
+}
+
+.hero p {
+  font-size: 16px;
+  line-height: 1.5;
+  color: #5f6873;
+}
+
+.card {
+  background: white;
+  border-radius: 20px;
+  padding: 25px;
+  margin-top: 20px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin: 18px 0 8px;
+}
+
+.type-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.type-btn {
+  flex: 1;
+  padding: 13px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.type-btn.active {
+  background: #18202a;
+  color: white;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: inherit;
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.submit-btn,
+.again-btn {
+  width: 100%;
+  border: 0;
+  padding: 15px;
+  margin-top: 25px;
+  border-radius: 10px;
+  background: #18202a;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.result {
+  text-align: center;
+}
+
+.score {
+  font-size: 45px;
+  font-weight: bold;
+  margin: 10px;
+}
+
+.result-box {
+  text-align: left;
+  background: #f4f6f8;
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 15px;
+}
+
+.result-box p {
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+.hidden {
+  display: none;
+}
+
+.loader {
+  width: 40px;
+  height: 40px;
+  margin: auto;
+  border: 4px solid #ddd;
+  border-top: 4px solid #18202a;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 500px) {
+  h1 {
+    font-size: 34px;
+  }
+
+  .card {
+    padding: 20px;
+  }
+
+  .type-buttons {
+    flex-direction: column;
+  }
+}let selectedType = "lost";
+
+const typeButtons = document.querySelectorAll(".type-btn");
+
+typeButtons.forEach(button => {
+  button.addEventListener("click", () => {
+
+    typeButtons.forEach(btn => btn.classList.remove("active"));
+
+    button.classList.add("active");
+
+    selectedType = button.dataset.type;
+  });
+});
+
+const form = document.getElementById("matchForm");
+const loading = document.getElementById("loading");
+const result = document.getElementById("result");
+
+form.addEventListener("submit", async (event) => {
+
+  event.preventDefault();
+
+  result.classList.add("hidden");
+  loading.classList.remove("hidden");
+
+  const data = {
+    type: selectedType,
+    itemName: document.getElementById("itemName").value,
+    description: document.getElementById("description").value,
+    location: document.getElementById("location").value,
+    date: document.getElementById("date").value
+  };
+
+  try {
+
+    const response = await fetch("/api/match", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(data)
+    });
+
+    const output = await response.json();
+
+    if (!response.ok) {
+      throw new Error(output.error || "Request failed");
+    }
+
+    document.getElementById("score").textContent =
+      output.matchScore;
+
+    document.getElementById("category").textContent =
+      "Category: " + output.category;
+
+    document.getElementById("summary").textContent =
+      output.summary;
+
+    document.getElementById("suggestion").textContent =
+      output.suggestion;
+
+    loading.classList.add("hidden");
+    result.classList.remove("hidden");
+
+  } catch (error) {
+
+    loading.classList.add("hidden");
+
+    alert(error.message);
+  }
+});
+
+function resetForm() {
+  form.reset();
+  result.classList.add("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}FROM node:20-slim
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install --omit=dev
+
+COPY . .
+
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["npm", "start"]FROM node:20-slim
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install --omit=dev
+
+COPY . .
+
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["npm", "start"]FROM node:20-slim
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install --omit=dev
+
+COPY . .
+
+ENV PORT=8080
+
+EXPOSE 8080
+node_modules
+.env
+.DS_Store
+CMD ["npm", "start"]
